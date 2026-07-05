@@ -1,11 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
-
-import screenshotBrowser from "./assets/TeslaCamViewer-1440x900-2.webp";
-import screenshotGrid from "./assets/TeslaCamViewer-1440x900-3.webp";
-import screenshotTimeline from "./assets/TeslaCamViewer-1440x900-4.webp";
-import screenshotMap from "./assets/TeslaCamViewer-1440x900-5.webp";
-import screenshotPlayback from "./assets/TeslaCamViewer-1440x900.webp";
-import demoVideo from "./assets/demo.mp4";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 type Screenshot = {
     src: string;
@@ -13,33 +6,59 @@ type Screenshot = {
     caption: string;
 };
 
-const screenshots: Screenshot[] = [
+type AssetModule = {
+    default: string;
+};
+
+type ScreenshotDefinition = Omit<Screenshot, "src"> & {
+    loadSrc: () => Promise<string>;
+};
+
+const loadAsset = (loader: () => Promise<AssetModule>) => loader().then((module) => module.default);
+
+const screenshotDefinitions: ScreenshotDefinition[] = [
     {
-        src: screenshotPlayback,
+        loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900.webp")),
         title: "Playback",
         caption: "Scrub a drive, jump to key moments, and switch camera angles quickly.",
     },
     {
-        src: screenshotBrowser,
+        loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-2.webp")),
         title: "Events",
         caption: "Browse SavedClips, SentryClips, and RecentClips in one macOS window.",
     },
     {
-        src: screenshotGrid,
+        loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-3.webp")),
         title: "Grid View",
         caption: "Review front, rear, side, and pillar cameras together without losing context.",
     },
     {
-        src: screenshotTimeline,
+        loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-4.webp")),
         title: "Timeline",
         caption: "Set in and out points for the segment you want to keep.",
     },
     {
-        src: screenshotMap,
+        loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-5.webp")),
         title: "Map",
         caption: "Keep location context beside the footage when GPS data is available.",
     },
 ];
+
+const loadDemoVideo = () => loadAsset(() => import("./assets/demo.mp4"));
+
+const isVideoFullyBuffered = (video: HTMLVideoElement) => {
+    if (!Number.isFinite(video.duration) || video.duration <= 0) {
+        return false;
+    }
+
+    for (let index = 0; index < video.buffered.length; index += 1) {
+        if (video.buffered.start(index) <= 0.25 && video.buffered.end(index) >= video.duration - 0.25) {
+            return true;
+        }
+    }
+
+    return false;
+};
 
 const features = [
     "Multi-camera TeslaCam playback",
@@ -101,14 +120,88 @@ const App = () => {
 };
 
 const MarketingPage = () => {
+    const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+    const [demoVideoSrc, setDemoVideoSrc] = useState<string | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
+    const [isDemoVideoReady, setIsDemoVideoReady] = useState(false);
+    const videoRef = useRef<HTMLVideoElement>(null);
     const activeScreenshot = screenshots[activeIndex];
 
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadMedia = async () => {
+            const [loadedScreenshots, loadedDemoVideo] = await Promise.all([
+                Promise.all(
+                    screenshotDefinitions.map(async ({ loadSrc, ...screenshot }) => ({
+                        ...screenshot,
+                        src: await loadSrc(),
+                    })),
+                ),
+                loadDemoVideo(),
+            ]);
+
+            if (isMounted) {
+                setScreenshots(loadedScreenshots);
+                setDemoVideoSrc(loadedDemoVideo);
+            }
+        };
+
+        void loadMedia();
+
+        return () => {
+            isMounted = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (activeIndex >= screenshots.length) {
+            setActiveIndex(0);
+        }
+    }, [activeIndex, screenshots.length]);
+
+    useEffect(() => {
+        if (screenshots.length <= 1) {
+            return undefined;
+        }
+
+        const rotationTimer = window.setInterval(() => {
+            setActiveIndex((currentIndex) => (currentIndex + 1) % screenshots.length);
+        }, 3000);
+
+        return () => window.clearInterval(rotationTimer);
+    }, [screenshots.length]);
+
+    useEffect(() => {
+        setIsDemoVideoReady(false);
+    }, [demoVideoSrc]);
+
+    const autoplayDemoVideo = () => {
+        const video = videoRef.current;
+
+        if (!video || !isVideoFullyBuffered(video)) {
+            return;
+        }
+
+        setIsDemoVideoReady(true);
+        void video.play().catch(() => {
+            setIsDemoVideoReady(false);
+        });
+    };
+
     const nextScreenshot = () => {
+        if (screenshots.length === 0) {
+            return;
+        }
+
         setActiveIndex((currentIndex) => (currentIndex + 1) % screenshots.length);
     };
 
     const previousScreenshot = () => {
+        if (screenshots.length === 0) {
+            return;
+        }
+
         setActiveIndex((currentIndex) => (currentIndex - 1 + screenshots.length) % screenshots.length);
     };
 
@@ -133,11 +226,16 @@ const MarketingPage = () => {
                 <section aria-label="TeslaCamViewer screenshots" className="relative">
                     <div className="overflow-hidden border border-slate-200 bg-white shadow-2xl shadow-slate-200/70">
                         <div className="aspect-[16/10] w-full bg-slate-950">
-                            <img
-                                src={activeScreenshot.src}
-                                alt={`TeslaCamViewer ${activeScreenshot.title} screenshot`}
-                                className="h-full w-full object-contain"
-                            />
+                            {activeScreenshot ? (
+                                <img
+                                    src={activeScreenshot.src}
+                                    alt={`TeslaCamViewer ${activeScreenshot.title} screenshot`}
+                                    className="h-full w-full object-contain"
+                                    decoding="async"
+                                />
+                            ) : (
+                                <div className="h-full w-full animate-pulse bg-slate-900" aria-label="Loading screenshot" />
+                            )}
                         </div>
                     </div>
 
@@ -162,8 +260,12 @@ const MarketingPage = () => {
 
                     <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
                         <div>
-                            <h2 className="text-xl font-semibold text-slate-950">{activeScreenshot.title}</h2>
-                            <p className="mt-1 text-sm leading-6 text-slate-600">{activeScreenshot.caption}</p>
+                            <h2 className="text-xl font-semibold text-slate-950">
+                                {activeScreenshot?.title ?? "Loading"}
+                            </h2>
+                            <p className="mt-1 text-sm leading-6 text-slate-600">
+                                {activeScreenshot?.caption ?? "Preparing screenshots."}
+                            </p>
                         </div>
                         <div className="flex gap-2 overflow-x-auto pb-1">
                             {screenshots.map((screenshot, index) => (
@@ -180,7 +282,13 @@ const MarketingPage = () => {
                                             : "border-slate-200 hover:border-slate-400"
                                     }`}
                                 >
-                                    <img src={screenshot.src} alt="" className="h-full w-full object-contain" />
+                                    <img
+                                        src={screenshot.src}
+                                        alt=""
+                                        className="h-full w-full object-contain"
+                                        decoding="async"
+                                        loading="lazy"
+                                    />
                                 </button>
                             ))}
                         </div>
@@ -213,7 +321,24 @@ const MarketingPage = () => {
                     </p>
                 </div>
                 <div className="overflow-hidden border border-slate-200 bg-slate-950 shadow-xl shadow-slate-200">
-                    <video src={demoVideo} className="h-auto w-full" controls playsInline preload="metadata" />
+                    {demoVideoSrc ? (
+                        <video
+                            ref={videoRef}
+                            src={demoVideoSrc}
+                            className="h-auto w-full"
+                            controls
+                            muted
+                            playsInline
+                            preload="auto"
+                            onLoadedMetadata={autoplayDemoVideo}
+                            onProgress={autoplayDemoVideo}
+                            onCanPlayThrough={autoplayDemoVideo}
+                            onSuspend={autoplayDemoVideo}
+                            aria-busy={!isDemoVideoReady}
+                        />
+                    ) : (
+                        <div className="aspect-video w-full animate-pulse bg-slate-900" aria-label="Loading demo video" />
+                    )}
                 </div>
             </section>
 
