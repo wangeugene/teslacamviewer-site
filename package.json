@@ -14,8 +14,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "i18next": "26.3.4",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "react-i18next": "17.0.8"
   },
   "devDependencies": {
     "@types/react": "19.2.14",

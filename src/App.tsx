@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+
+import i18n, {
+    defaultLocale,
+    isSupportedLocale,
+    localeNames,
+    supportedLocales,
+    type Locale,
+    type PageId,
+} from "./i18n";
 
 type Screenshot = {
     src: string;
@@ -6,41 +16,48 @@ type Screenshot = {
     caption: string;
 };
 
+type ScreenshotCopy = {
+    title: string;
+    caption: string;
+};
+
+type InfoSection = {
+    title: string;
+    body: string;
+};
+
 type AssetModule = {
     default: string;
 };
 
-type ScreenshotDefinition = Omit<Screenshot, "src"> & {
+type ScreenshotAssetDefinition = {
     loadSrc: () => Promise<string>;
 };
 
+type RouteState = {
+    locale: Locale;
+    page: PageId;
+};
+
+const supportEmail = "yuzhen23@icloud.com";
+
 const loadAsset = (loader: () => Promise<AssetModule>) => loader().then((module) => module.default);
 
-const screenshotDefinitions: ScreenshotDefinition[] = [
+const screenshotAssetDefinitions: ScreenshotAssetDefinition[] = [
     {
         loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900.webp")),
-        title: "Playback",
-        caption: "Scrub a drive, jump to key moments, and switch camera angles quickly.",
     },
     {
         loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-2.webp")),
-        title: "Events",
-        caption: "Browse SavedClips, SentryClips, and RecentClips in one macOS window.",
     },
     {
         loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-3.webp")),
-        title: "Grid View",
-        caption: "Review front, rear, side, and pillar cameras together without losing context.",
     },
     {
         loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-4.webp")),
-        title: "Timeline",
-        caption: "Set in and out points for the segment you want to keep.",
     },
     {
         loadSrc: () => loadAsset(() => import("./assets/TeslaCamViewer-1440x900-5.webp")),
-        title: "Map",
-        caption: "Keep location context beside the footage when GPS data is available.",
     },
 ];
 
@@ -60,89 +77,136 @@ const isVideoFullyBuffered = (video: HTMLVideoElement) => {
     return false;
 };
 
-const features = [
-    "Multi-camera TeslaCam playback",
-    "Saved, Sentry, and Recent clip browsing",
-    "Timeline selection for export workflows",
-    "Map context for recorded drives",
-];
+const parseRoute = (pathname: string): RouteState => {
+    const segments = pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+    const locale = isSupportedLocale(segments[0]) ? segments[0] : defaultLocale;
+    const pageSegment = locale === defaultLocale && segments[0] !== defaultLocale ? segments[0] : segments[1];
 
-const troubleshooting = [
-    "Confirm your TeslaCam USB drive or copied folder still contains the TeslaCam directory structure.",
-    "If clips do not appear, try opening the parent folder that contains SavedClips, SentryClips, or RecentClips.",
-    "If playback is choppy, copy the footage to your Mac first and open the local folder.",
-    "For missing location data, check whether the clip includes GPS metadata from the vehicle.",
-];
-
-const supportDetails = [
-    "macOS version",
-    "TeslaCamViewer app version",
-    "A short description of what happened",
-    "Whether the issue affects SavedClips, SentryClips, RecentClips, or all folders",
-    "A screenshot or screen recording if it helps explain the issue",
-];
-
-const privacySections = [
-    {
-        title: "Data collection",
-        body: "TeslaCamViewer does not collect, sell, or share personal data. The app does not include advertising SDKs, third-party analytics, or tracking technologies.",
-    },
-    {
-        title: "TeslaCam files",
-        body: "Video files, screenshots, GPS metadata, and other TeslaCam content are processed locally on your Mac. Your footage is not uploaded to TeslaCamViewer servers.",
-    },
-    {
-        title: "Exports and sharing",
-        body: "Any files you export, save, or share are controlled by you. TeslaCamViewer cannot control data after you choose to send it to another app, service, or person.",
-    },
-    {
-        title: "Support requests",
-        body: "If you contact support by email, the information you choose to include is used only to respond to your request. Avoid sending sensitive footage or personal information unless it is necessary for troubleshooting.",
-    },
-    {
-        title: "Changes",
-        body: "This policy may be updated when TeslaCamViewer changes. The latest version will be posted on this page.",
-    },
-];
-
-const App = () => {
-    const currentPath = window.location.pathname.replace(/\/+$/, "") || "/";
-
-    if (currentPath === "/support") {
-        return <SupportPage />;
+    if (pageSegment === "support" || pageSegment === "privacy") {
+        return { locale, page: pageSegment };
     }
 
-    if (currentPath === "/privacy") {
-        return <PrivacyPage />;
-    }
-
-    return <MarketingPage />;
+    return { locale, page: "marketing" };
 };
 
-const MarketingPage = () => {
-    const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+const localizedPath = (locale: Locale, page: PageId) => {
+    const pagePath = page === "marketing" ? "" : `/${page}`;
+
+    if (locale === defaultLocale) {
+        return pagePath || "/";
+    }
+
+    return pagePath ? `/${locale}${pagePath}` : `/${locale}/`;
+};
+
+const localizedHomePath = (locale: Locale) => localizedPath(locale, "marketing");
+
+const absoluteUrl = (path: string) => `${window.location.origin}${path}`;
+
+const setManagedLink = (rel: string, href: string) => {
+    let link = document.head.querySelector<HTMLLinkElement>(`link[rel="${rel}"][data-i18n-managed="true"]`);
+
+    if (!link) {
+        link = document.createElement("link");
+        link.rel = rel;
+        link.dataset.i18nManaged = "true";
+        document.head.appendChild(link);
+    }
+
+    link.href = href;
+};
+
+const usePageMetadata = (locale: Locale, page: PageId) => {
+    const { t } = useTranslation();
+
+    useEffect(() => {
+        document.documentElement.lang = locale;
+        document.documentElement.dir = "ltr";
+        document.title = t(`meta.${page}.title`);
+
+        const description = t(`meta.${page}.description`);
+        let descriptionMeta = document.head.querySelector<HTMLMetaElement>('meta[name="description"]');
+
+        if (!descriptionMeta) {
+            descriptionMeta = document.createElement("meta");
+            descriptionMeta.name = "description";
+            document.head.appendChild(descriptionMeta);
+        }
+
+        descriptionMeta.content = description;
+        setManagedLink("canonical", absoluteUrl(localizedPath(locale, page)));
+
+        document.head
+            .querySelectorAll<HTMLLinkElement>('link[rel="alternate"][data-i18n-managed="true"]')
+            .forEach((link) => link.remove());
+
+        supportedLocales.forEach((alternateLocale) => {
+            const link = document.createElement("link");
+            link.rel = "alternate";
+            link.hreflang = alternateLocale;
+            link.href = absoluteUrl(localizedPath(alternateLocale, page));
+            link.dataset.i18nManaged = "true";
+            document.head.appendChild(link);
+        });
+
+        const defaultLink = document.createElement("link");
+        defaultLink.rel = "alternate";
+        defaultLink.hreflang = "x-default";
+        defaultLink.href = absoluteUrl(localizedPath(defaultLocale, page));
+        defaultLink.dataset.i18nManaged = "true";
+        document.head.appendChild(defaultLink);
+    }, [locale, page, t]);
+};
+
+const App = () => {
+    const route = useMemo(() => parseRoute(window.location.pathname), []);
+
+    useEffect(() => {
+        if (i18n.language !== route.locale) {
+            void i18n.changeLanguage(route.locale);
+        }
+    }, [route.locale]);
+
+    usePageMetadata(route.locale, route.page);
+
+    if (route.page === "support") {
+        return <SupportPage locale={route.locale} page={route.page} />;
+    }
+
+    if (route.page === "privacy") {
+        return <PrivacyPage locale={route.locale} page={route.page} />;
+    }
+
+    return <MarketingPage locale={route.locale} page={route.page} />;
+};
+
+const MarketingPage = ({ locale, page }: RouteState) => {
+    const { t } = useTranslation();
+    const [screenshotSources, setScreenshotSources] = useState<string[]>([]);
     const [demoVideoSrc, setDemoVideoSrc] = useState<string | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [isDemoVideoReady, setIsDemoVideoReady] = useState(false);
     const videoRef = useRef<HTMLVideoElement>(null);
+    const screenshotCopy = t("screenshots.items", { returnObjects: true }) as ScreenshotCopy[];
+    const screenshots: Screenshot[] = screenshotSources.map((src, index) => ({
+        src,
+        title: screenshotCopy[index]?.title ?? "",
+        caption: screenshotCopy[index]?.caption ?? "",
+    }));
     const activeScreenshot = screenshots[activeIndex];
+    const features = t("marketing.features", { returnObjects: true }) as string[];
 
     useEffect(() => {
         let isMounted = true;
 
         const loadMedia = async () => {
             const [loadedScreenshots, loadedDemoVideo] = await Promise.all([
-                Promise.all(
-                    screenshotDefinitions.map(async ({ loadSrc, ...screenshot }) => ({
-                        ...screenshot,
-                        src: await loadSrc(),
-                    })),
-                ),
+                Promise.all(screenshotAssetDefinitions.map(({ loadSrc }) => loadSrc())),
                 loadDemoVideo(),
             ]);
 
             if (isMounted) {
-                setScreenshots(loadedScreenshots);
+                setScreenshotSources(loadedScreenshots);
                 setDemoVideoSrc(loadedDemoVideo);
             }
         };
@@ -207,42 +271,42 @@ const MarketingPage = () => {
 
     return (
         <main className="min-h-screen bg-[#f7f8fb] text-slate-950">
-            <SiteHeader />
+            <SiteHeader locale={locale} page={page} />
 
             <section className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 pb-12 pt-5 sm:px-6 lg:px-8">
                 <div className="flex flex-col gap-4">
-                    <p className="text-sm font-semibold uppercase text-red-600">macOS TeslaCam review</p>
+                    <p className="text-sm font-semibold text-red-600">{t("marketing.eyebrow")}</p>
                     <div className="grid gap-5 lg:grid-cols-[1fr_0.72fr] lg:items-end">
                         <h1 className="max-w-4xl text-4xl font-semibold leading-tight text-slate-950 sm:text-5xl lg:text-6xl">
-                            TeslaCamViewer
+                            {t("marketing.headline")}
                         </h1>
-                        <p className="max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">
-                            Review TeslaCam and Sentry footage on your Mac with synchronized camera views, event
-                            browsing, timeline selection, and location context.
-                        </p>
+                        <p className="max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">{t("marketing.intro")}</p>
                     </div>
                 </div>
 
-                <section aria-label="TeslaCamViewer screenshots" className="relative">
+                <section aria-label={t("screenshots.ariaLabel")} className="relative">
                     <div className="overflow-hidden border border-slate-200 bg-white shadow-2xl shadow-slate-200/70">
                         <div className="aspect-[16/10] w-full bg-slate-950">
                             {activeScreenshot ? (
                                 <img
                                     src={activeScreenshot.src}
-                                    alt={`TeslaCamViewer ${activeScreenshot.title} screenshot`}
+                                    alt={t("screenshots.imageAlt", { title: activeScreenshot.title })}
                                     className="h-full w-full object-contain"
                                     decoding="async"
                                 />
                             ) : (
-                                <div className="h-full w-full animate-pulse bg-slate-900" aria-label="Loading screenshot" />
+                                <div
+                                    className="h-full w-full animate-pulse bg-slate-900"
+                                    aria-label={t("shared.loadingScreenshot")}
+                                />
                             )}
                         </div>
                     </div>
 
                     <button
                         type="button"
-                        title="Previous screenshot"
-                        aria-label="Previous screenshot"
+                        title={t("screenshots.previous")}
+                        aria-label={t("screenshots.previous")}
                         onClick={previousScreenshot}
                         className="absolute left-2 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center bg-white/90 text-3xl text-slate-900 shadow-lg ring-1 ring-slate-200 transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-red-500 sm:-left-4"
                     >
@@ -250,8 +314,8 @@ const MarketingPage = () => {
                     </button>
                     <button
                         type="button"
-                        title="Next screenshot"
-                        aria-label="Next screenshot"
+                        title={t("screenshots.next")}
+                        aria-label={t("screenshots.next")}
                         onClick={nextScreenshot}
                         className="absolute right-2 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center bg-white/90 text-3xl text-slate-900 shadow-lg ring-1 ring-slate-200 transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-red-500 sm:-right-4"
                     >
@@ -261,19 +325,19 @@ const MarketingPage = () => {
                     <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
                         <div>
                             <h2 className="text-xl font-semibold text-slate-950">
-                                {activeScreenshot?.title ?? "Loading"}
+                                {activeScreenshot?.title || t("shared.loading")}
                             </h2>
                             <p className="mt-1 text-sm leading-6 text-slate-600">
-                                {activeScreenshot?.caption ?? "Preparing screenshots."}
+                                {activeScreenshot?.caption || t("shared.preparingScreenshots")}
                             </p>
                         </div>
                         <div className="flex gap-2 overflow-x-auto pb-1">
                             {screenshots.map((screenshot, index) => (
                                 <button
                                     type="button"
-                                    key={screenshot.title}
+                                    key={`${screenshot.title}-${index}`}
                                     title={screenshot.title}
-                                    aria-label={`Show ${screenshot.title} screenshot`}
+                                    aria-label={t("screenshots.show", { title: screenshot.title })}
                                     aria-pressed={activeIndex === index}
                                     onClick={() => setActiveIndex(index)}
                                     className={`h-16 w-24 shrink-0 border bg-slate-950 p-1 transition focus:outline-none focus:ring-2 focus:ring-red-500 ${
@@ -311,14 +375,11 @@ const MarketingPage = () => {
                 className="mx-auto grid max-w-7xl gap-8 px-4 py-14 sm:px-6 lg:grid-cols-[0.8fr_1fr] lg:items-center lg:px-8"
             >
                 <div>
-                    <p className="text-sm font-semibold uppercase text-emerald-700">Demo</p>
+                    <p className="text-sm font-semibold text-emerald-700">{t("marketing.demoEyebrow")}</p>
                     <h2 className="mt-3 text-3xl font-semibold leading-tight text-slate-950 sm:text-4xl">
-                        Fast review for real driving footage.
+                        {t("marketing.demoTitle")}
                     </h2>
-                    <p className="mt-4 text-base leading-7 text-slate-600">
-                        TeslaCamViewer keeps the footage front and center, with controls for switching views, checking
-                        events, selecting moments, and keeping map context nearby.
-                    </p>
+                    <p className="mt-4 text-base leading-7 text-slate-600">{t("marketing.demoBody")}</p>
                 </div>
                 <div className="overflow-hidden border border-slate-200 bg-slate-950 shadow-xl shadow-slate-200">
                     {demoVideoSrc ? (
@@ -337,7 +398,7 @@ const MarketingPage = () => {
                             aria-busy={!isDemoVideoReady}
                         />
                     ) : (
-                        <div className="aspect-video w-full animate-pulse bg-slate-900" aria-label="Loading demo video" />
+                        <div className="aspect-video w-full animate-pulse bg-slate-900" aria-label={t("shared.loadingVideo")} />
                     )}
                 </div>
             </section>
@@ -345,53 +406,48 @@ const MarketingPage = () => {
             <section className="bg-slate-950 text-white">
                 <div className="mx-auto grid max-w-7xl gap-8 px-4 py-12 sm:px-6 lg:grid-cols-[1fr_auto] lg:items-center lg:px-8">
                     <div>
-                        <h2 className="text-3xl font-semibold">Built for macOS drivers who keep the receipts.</h2>
-                        <p className="mt-4 max-w-3xl text-base leading-7 text-slate-300">
-                            Keep review sessions simple: open the folder, find the event, inspect every angle, and move
-                            on with the clip that matters.
-                        </p>
+                        <h2 className="text-3xl font-semibold">{t("marketing.ctaTitle")}</h2>
+                        <p className="mt-4 max-w-3xl text-base leading-7 text-slate-300">{t("marketing.ctaBody")}</p>
                     </div>
                     <a
-                        href="/support"
-                        className="inline-flex h-12 items-center justify-center border border-white/30 px-5 text-sm font-semibold text-white transition hover:bg-white hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-white"
+                        href={localizedPath(locale, "support")}
+                        className="inline-flex min-h-12 items-center justify-center border border-white/30 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white hover:text-slate-950 focus:outline-none focus:ring-2 focus:ring-white"
                     >
-                        Support
+                        {t("nav.support")}
                     </a>
                 </div>
             </section>
 
-            <SiteFooter />
+            <SiteFooter locale={locale} />
         </main>
     );
 };
 
-const SupportPage = () => {
-    const supportEmail = "yuzhen23@icloud.com";
-    const pageTitle = useMemo(() => "TeslaCamViewer Support", []);
+const SupportPage = ({ locale, page }: RouteState) => {
+    const { t } = useTranslation();
+    const troubleshooting = t("support.troubleshooting", { returnObjects: true }) as string[];
+    const supportDetails = t("support.details", { returnObjects: true }) as string[];
 
     return (
         <main className="min-h-screen bg-[#f7f8fb] text-slate-950">
-            <SiteHeader />
+            <SiteHeader locale={locale} page={page} />
 
             <section className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
-                <p className="text-sm font-semibold uppercase text-red-600">Support</p>
-                <h1 className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">{pageTitle}</h1>
-                <p className="mt-5 max-w-3xl text-base leading-7 text-slate-600 sm:text-lg">
-                    Find quick fixes for common TeslaCamViewer issues, then send the details below if you still need
-                    help.
-                </p>
+                <p className="text-sm font-semibold text-red-600">{t("support.eyebrow")}</p>
+                <h1 className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">{t("support.title")}</h1>
+                <p className="mt-5 max-w-3xl text-base leading-7 text-slate-600 sm:text-lg">{t("support.intro")}</p>
             </section>
 
             <section className="border-y border-slate-200 bg-white">
                 <div className="mx-auto grid max-w-5xl gap-6 px-4 py-10 sm:px-6 lg:grid-cols-2 lg:px-8">
-                    <InfoPanel title="Troubleshooting">
+                    <InfoPanel title={t("support.troubleshootingTitle")}>
                         <ul className="space-y-3 text-sm leading-6 text-slate-600">
                             {troubleshooting.map((item) => (
                                 <li key={item}>{item}</li>
                             ))}
                         </ul>
                     </InfoPanel>
-                    <InfoPanel title="Include in your message">
+                    <InfoPanel title={t("support.detailsTitle")}>
                         <ul className="space-y-3 text-sm leading-6 text-slate-600">
                             {supportDetails.map((item) => (
                                 <li key={item}>{item}</li>
@@ -403,38 +459,34 @@ const SupportPage = () => {
 
             <section className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
                 <div className="border border-slate-200 bg-white p-6 shadow-lg shadow-slate-200/70">
-                    <p className="text-sm font-semibold text-slate-950">Contact</p>
+                    <p className="text-sm font-semibold text-slate-950">{t("shared.contact")}</p>
                     <a
                         href={`mailto:${supportEmail}`}
-                        className="mt-3 inline-block text-lg font-semibold text-red-600 underline decoration-red-200 underline-offset-4 hover:text-red-700"
+                        className="mt-3 inline-block break-all text-lg font-semibold text-red-600 underline decoration-red-200 underline-offset-4 hover:text-red-700"
                     >
                         {supportEmail}
                     </a>
-                    <p className="mt-4 text-sm leading-6 text-slate-600">
-                        TeslaCamViewer is an independent macOS app and is not affiliated with Tesla, Inc.
-                    </p>
+                    <p className="mt-4 text-sm leading-6 text-slate-600">{t("shared.affiliation")}</p>
                 </div>
             </section>
 
-            <SiteFooter />
+            <SiteFooter locale={locale} />
         </main>
     );
 };
 
-const PrivacyPage = () => {
-    const supportEmail = "yuzhen23@icloud.com";
+const PrivacyPage = ({ locale, page }: RouteState) => {
+    const { t } = useTranslation();
+    const privacySections = t("privacy.sections", { returnObjects: true }) as InfoSection[];
 
     return (
         <main className="min-h-screen bg-[#f7f8fb] text-slate-950">
-            <SiteHeader />
+            <SiteHeader locale={locale} page={page} />
 
             <section className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
-                <p className="text-sm font-semibold uppercase text-red-600">Privacy Policy</p>
-                <h1 className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">TeslaCamViewer Privacy Policy</h1>
-                <p className="mt-5 max-w-3xl text-base leading-7 text-slate-600 sm:text-lg">
-                    Effective date: July 3, 2026. TeslaCamViewer is designed to review TeslaCam footage locally on your
-                    Mac.
-                </p>
+                <p className="text-sm font-semibold text-red-600">{t("privacy.eyebrow")}</p>
+                <h1 className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">{t("privacy.title")}</h1>
+                <p className="mt-5 max-w-3xl text-base leading-7 text-slate-600 sm:text-lg">{t("privacy.intro")}</p>
             </section>
 
             <section className="border-y border-slate-200 bg-white">
@@ -449,24 +501,22 @@ const PrivacyPage = () => {
 
             <section className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
                 <div className="border border-slate-200 bg-white p-6 shadow-lg shadow-slate-200/70">
-                    <p className="text-sm font-semibold text-slate-950">Contact</p>
+                    <p className="text-sm font-semibold text-slate-950">{t("shared.contact")}</p>
                     <p className="mt-3 text-sm leading-6 text-slate-600">
-                        For privacy questions, contact{" "}
+                        {t("privacy.contactPrefix")}{" "}
                         <a
                             href={`mailto:${supportEmail}`}
-                            className="font-semibold text-red-600 underline decoration-red-200 underline-offset-4 hover:text-red-700"
+                            className="break-all font-semibold text-red-600 underline decoration-red-200 underline-offset-4 hover:text-red-700"
                         >
                             {supportEmail}
                         </a>
                         .
                     </p>
-                    <p className="mt-4 text-sm leading-6 text-slate-600">
-                        TeslaCamViewer is an independent macOS app and is not affiliated with Tesla, Inc.
-                    </p>
+                    <p className="mt-4 text-sm leading-6 text-slate-600">{t("shared.affiliation")}</p>
                 </div>
             </section>
 
-            <SiteFooter />
+            <SiteFooter locale={locale} />
         </main>
     );
 };
@@ -478,44 +528,75 @@ const InfoPanel = ({ title, children }: { title: string; children: ReactNode }) 
     </article>
 );
 
-const SiteHeader = () => (
-    <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
-        <nav className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-            <a href="/" className="text-base font-semibold text-slate-950">
-                TeslaCamViewer
-            </a>
-            <div className="flex items-center gap-5 text-sm font-medium text-slate-600">
-                <a href="/#demo" className="transition hover:text-slate-950">
-                    Demo
-                </a>
-                <a href="/support" className="transition hover:text-slate-950">
-                    Support
-                </a>
-                <a href="/privacy" className="transition hover:text-slate-950">
-                    Privacy
-                </a>
-            </div>
-        </nav>
-    </header>
-);
+const SiteHeader = ({ locale, page }: RouteState) => {
+    const { t } = useTranslation();
 
-const SiteFooter = () => (
-    <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-            <p>© 2026 Eugene Wang</p>
-            <div className="flex gap-5">
-                <a href="/" className="hover:text-slate-950">
-                    Marketing
+    const handleLocaleChange = (event: ChangeEvent<HTMLSelectElement>) => {
+        const nextLocale = event.target.value;
+
+        if (isSupportedLocale(nextLocale)) {
+            window.location.href = localizedPath(nextLocale, page);
+        }
+    };
+
+    return (
+        <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
+            <nav className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+                <a href={localizedHomePath(locale)} className="text-base font-semibold text-slate-950">
+                    {t("shared.brand")}
                 </a>
-                <a href="/support" className="hover:text-slate-950">
-                    Support
-                </a>
-                <a href="/privacy" className="hover:text-slate-950">
-                    Privacy
-                </a>
+                <div className="flex flex-wrap items-center gap-3 text-sm font-medium text-slate-600 sm:gap-5">
+                    <a href={`${localizedHomePath(locale)}#demo`} className="transition hover:text-slate-950">
+                        {t("nav.demo")}
+                    </a>
+                    <a href={localizedPath(locale, "support")} className="transition hover:text-slate-950">
+                        {t("nav.support")}
+                    </a>
+                    <a href={localizedPath(locale, "privacy")} className="transition hover:text-slate-950">
+                        {t("nav.privacy")}
+                    </a>
+                    <label className="sr-only" htmlFor="language-switcher">
+                        {t("nav.languageLabel")}
+                    </label>
+                    <select
+                        id="language-switcher"
+                        value={locale}
+                        onChange={handleLocaleChange}
+                        className="max-w-full border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                    >
+                        {supportedLocales.map((supportedLocale) => (
+                            <option key={supportedLocale} value={supportedLocale}>
+                                {localeNames[supportedLocale]}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            </nav>
+        </header>
+    );
+};
+
+const SiteFooter = ({ locale }: { locale: Locale }) => {
+    const { t } = useTranslation();
+
+    return (
+        <footer className="border-t border-slate-200 bg-white">
+            <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
+                <p>{t("footer.copyright")}</p>
+                <div className="flex flex-wrap gap-5">
+                    <a href={localizedHomePath(locale)} className="hover:text-slate-950">
+                        {t("footer.marketing")}
+                    </a>
+                    <a href={localizedPath(locale, "support")} className="hover:text-slate-950">
+                        {t("footer.support")}
+                    </a>
+                    <a href={localizedPath(locale, "privacy")} className="hover:text-slate-950">
+                        {t("footer.privacy")}
+                    </a>
+                </div>
             </div>
-        </div>
-    </footer>
-);
+        </footer>
+    );
+};
 
 export default App;
